@@ -1,0 +1,52 @@
+apiVersion: v1
+kind: Service
+metadata:
+  annotations:
+    kompose.cmd: C:\ProgramData\chocolatey\lib\kubernetes-kompose\tools\kompose.exe convert -c
+    kompose.version: 1.26.1 (a9d05d509)
+  creationTimestamp: null
+  labels:
+    io.kompose.service: frappe
+  name: frappe
+spec:
+  ports:
+    - name: "8000"
+      port: 8000
+      targetPort: 8000
+    - name: "8001"
+      port: 8001
+      targetPort: 8001
+    - name: "8002"
+      port: 8002
+      targetPort: 8002
+    - name: "8003"
+      port: 8003
+      targetPort: 8003
+    - name: "8004"
+      port: 8004
+      targetPort: 8004
+    - name: "8005"
+      port: 8005
+      targetPort: 8005
+    - name: "9000"
+      port: 9000
+      targetPort: 9000
+    - name: "9001"
+      port: 9001
+      targetPort: 9001
+    - name: "9002"
+      port: 9002
+      targetPort: 9002
+    - name: "9003"
+      port: 9003
+      targetPort: 9003
+    - name: "9004"
+      port: 9004
+      targetPort: 9004
+    - name: "9005"
+      port: 9005
+      targetPort: 9005
+  selector:
+    io.kompose.service: frappe
+status:
+  loadBalancer: {}

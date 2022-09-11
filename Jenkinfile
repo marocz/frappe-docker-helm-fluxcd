@@ -1,0 +1,263 @@
+node {
+    try {
+        notifyBuild('STARTED')
+
+        def giturl = "<URL>"
+
+        stage('Checkout') {
+            script{
+                properties([
+                    parameters([
+                        string(
+                            defaultvalue: 'main',
+                            name: 'BRANCH',
+                            trim: true
+                        ),
+                         string(
+                            defaultvalue: '<ghjjdjdhhhdhhd>',
+                            name: 'GITHUB_TOKEN',
+                            trim: true
+                        ),
+                         string(
+                            defaultvalue: '<marocz>',
+                            name: 'GITHUB_USER',
+                            trim: true
+                        ),
+                    ])
+                ])
+            }
+        }
+        stage('Checkout') {
+            gitCheckThatOut('${params.BRANCH}', '${giturl}')
+        }
+
+        stage('Helm Chart Build & Push') {
+            echo 'Building Helm Chart and Pushing to Public Registry'
+              sshagent(['121.0.0.1'])
+        {
+       
+   
+        script{
+                 
+              sh """
+
+                //Copy example folder for development and container
+                cp -R development/vscode-example development/.vscode
+                cp -R devcontainer-example .devcontainer
+                cd .devcontainer
+
+                //Convert docker-compose configuration to helm chart
+                kompose convert -c
+                cd docker-compose/
+
+                //Add chart to public repositories
+                helm repo add frappe-maro-public https://talend.github.io/helm-charts-public/stable
+
+              """"
+            
+        }
+        }
+        }
+
+        
+        stage('K8 Deploy') {
+            sshagent(['121.0.0.1'])
+        {
+   
+        script{
+        try{
+             sh """
+             ssh -o StrictHostKeyChecking=no ec2-user@121.0.0.1
+             echo 'export PATH=$PATH:/home/ec2-user/bin' >> ~/.bashrc
+             
+             //Deploy using helm
+             helm install --repo https://talend.github.io/helm-charts-public/stable frappe-maro-public nginx
+             helm list
+
+             """
+            }catch(error)
+        {   }
+        }
+        }
+     
+        }
+        
+        
+        
+        stage('FluxCD') {
+            echo 'Docker Push'
+              sshagent(['121.0.0.1'])
+        {
+              script{
+                try{
+                    sh """
+
+                    mkdir ./clusters/my-cluster
+
+                    //installing FluxCD on Clusters
+                    curl -s https://toolkit.Fluxcd.io/install.sh | sudo bash
+                    Flux -v
+                    export GITHUB_TOKEN='${params.GITHUB_TOKEN}'
+                    export GITHUB_USER='${params.GITHUB_USER}'
+                    Flux bootstrap github \
+                    --owner=$GITHUB_USER \
+                    --repository=Flux \           
+                    --branch=main \
+                    --path=./clusters/my-cluster \
+                    --personal
+
+                    //Checking Flux Pods
+                    kubectl get pods -n Flux-system 
+
+                    Flux get kustomizations
+
+                    //Create a source in flux cd for flux to track changes or commit on a repositories
+                    flux create source git frappe \
+                    --url='${giturl}' \
+                    --branch=main \
+                    --interval=30s \
+                    --export > ./clusters/my-cluster/frappe-source.yaml
+
+                    git add -A && git commit -m "Add frappe GitRepository"
+                    git push
+
+                   // flux create kustomization frappe \
+                   // --source=frappe \
+                   // --path="./kustomize" \
+                   //  --prune=true \
+                   // --validation=client \
+                   // --interval=5m \
+                   // --export > ./clusters/my-cluster/frappe-kustomization.yaml
+
+                    //Get git commit of sources
+                    flux get sources git
+ 
+                    //Create and deploy kustomization file to point to helm charts
+                    cd .devcontainer
+                    mkdir base
+                    cat <<'EOF' >/base/kustomization.yaml
+                    helmCharts:
+                    - name: frappe
+                      includeCRDs: false
+                      releaseName: frappe-maro-public
+                      version: 1
+                      repo: https://talend.github.io/helm-charts-public/stable
+                    EOF
+
+                    kustomize build --enable-helm --helm-command helm /base/
+
+
+                    git add -A && git commit -m "Add frappe Kustomization"
+
+                    //Get logs of changes and write to a log file
+                    kubectl get gitrepositories.source.toolkit.fluxcd.io -n flux-system > frappe-log.txt
+
+                    git push
+                    
+                    """
+                 }catch(error)
+        {   }
+                }
+        }
+        }
+
+
+        stage('Clean up'){
+            
+            echo 'Cleaning up docker volume'
+                sshagent(['121.0.0.1'])
+        {
+               script{
+      
+             sh """
+             ssh -o StrictHostKeyChecking=no ec2-user@121.0.0.1
+            docker system prune --all --force
+            
+            """
+        }
+        }
+        }
+        
+  } catch (e) {
+    // If there was an exception thrown, the build failed
+    currentBuild.result = "FAILED"
+                    sshagent(['121.0.0.1'])
+        {
+               script{
+      
+             sh """
+             ssh -o StrictHostKeyChecking=no ec2-user@121.0.0.1
+            docker system prune --all --force
+            
+            """
+        }
+        }
+    throw e
+  } finally {
+    // Success or failure, always send notifications
+    notifyBuild(currentBuild.result)
+  }
+}
+
+
+/**
+ * Clean a Git project workspace.
+ * Uses 'git clean' if there is a repository found.
+ * Uses Pipeline 'deleteDir()' function if no .git directory is found.
+ */
+def gitClean() {
+    timeout(time: 60, unit: 'SECONDS') {
+        if (fileExists('.git')) {
+            echo 'Found Git repository: using Git to clean the tree.'
+            sh 'git reset --hard'
+    
+        }
+        else
+        {
+            echo 'No Git repository found: using deleteDir() to wipe clean'
+            deleteDir()
+        }
+    }
+}
+
+def notifyBuild(String buildStatus = 'STARTED') {
+  // build status of null means successful
+  buildStatus =  buildStatus ?: 'SUCCESSFUL'
+
+  // Default values
+  def colorName = 'RED'
+  def colorCode = '#FF0000'
+  def subject = "${buildStatus}: Job '${env.JOB_NAME} [${env.BUILD_NUMBER}]'"
+  def summary = "${subject} (${env.BUILD_URL})"
+  def details = """<p>STARTED: Job '${env.JOB_NAME} [${env.BUILD_NUMBER}]':</p>
+    <p>Check console output at &QUOT;<a href='${env.BUILD_URL}'>${env.JOB_NAME} [${env.BUILD_NUMBER}]</a>&QUOT;</p>"""
+
+  // Override default values based on build status
+  if (buildStatus == 'STARTED') {
+    color = 'YELLOW'
+    colorCode = '#FFFF00'
+  } else if (buildStatus == 'SUCCESSFUL') {
+    color = 'GREEN'
+    colorCode = '#00FF00'
+  } else {
+    color = 'RED'
+    colorCode = '#FF0000'
+  }
+
+  // Send notifications
+//  slackSend (color: colorCode, message: summary)
+
+  emailext(
+      subject: subject,
+      body: details,
+      recipientProviders: [developers(), requestor()]
+    )
+}
+
+def gitCheckThatOut(String branch, String vcsUrl) {
+    checkout([$class: 'GitSCM', branches: [[name: 'main']], doGenerateSubmoduleConfigurations: false, extensions: [], submoduleCfg: [], userRemoteConfigs: [[credentialsId: "04b043b-4d29-4c43-98e2-8311190a0c79", url: "${vcsUrl}"]]])  
+    branch =  branch ?: 'main'
+
+    gitClean()    
+        
+}
