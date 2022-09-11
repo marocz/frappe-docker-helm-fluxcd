@@ -1,1 +1,0 @@
-# frappe-docker-helm-fluxcd
